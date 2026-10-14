@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Лавка · дашборд заказов</title>
+<meta name="description" content="Интерактивный дашборд заказов пользователя: метрики по месяцам, потребление по позициям и категориям (d3.js + Vue.js)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="lib/vue.global.prod.js"></script>
+<script src="lib/d3.min.js"></script>
+<script src="data/orders.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f1;
+    --surface: #fcfcfb;
+    --surface-2: #efefeb;
+    --border: #e2e1dc;
+    --text: #0b0b0b;
+    --text-2: #52514e;
+    --text-3: #8a8984;
+    --accent: #2a78d6;
+    --accent-soft: #cde2fb;
+    --accent-2: #eb6834;
+    --grid: #e6e5e0;
+    --pos: #008300;
+    --neg: #e34948;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px -16px rgba(0,0,0,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121211; --surface: #1a1a19; --surface-2: #232322; --border: #2e2e2c;
+      --text: #f0efec; --text-2: #c3c2b7; --text-3: #8d8c85;
+      --accent: #3987e5; --accent-soft: #184f95; --accent-2: #d95926; --grid: #2a2a28;
+      --pos: #3fbf3f; --neg: #e66767;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -16px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #232322; --border: #2e2e2c;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #8d8c85;
+    --accent: #3987e5; --accent-soft: #184f95; --accent-2: #d95926; --grid: #2a2a28;
+    --pos: #3fbf3f; --neg: #e66767;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -16px rgba(0,0,0,.6);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 4px; }
+  .sub { color: var(--text-2); font-size: 13px; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .h2row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 12px; }
+  .hint { color: var(--text-3); font-size: 12px; }
+
+  /* filter bar */
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 18px; box-shadow: var(--shadow); }
+  .filters .lbl { font-size: 12px; color: var(--text-3); margin-right: 2px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px 5px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; transition: all .12s; }
+  .chip:hover { border-color: var(--text-3); color: var(--text); }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip .ic { font-size: 14px; line-height: 1; }
+  .chip.reset { background: transparent; }
+  .chip.reset.on { background: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-left: auto; }
+  .seg button { font: inherit; font-size: 13px; padding: 5px 12px; border: 0; background: var(--surface-2); color: var(--text-2); cursor: pointer; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  select { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+
+  /* layout */
+  .grid { display: grid; gap: 16px; }
+  .kpis { grid-template-columns: repeat(3, 1fr); }
+  .two { grid-template-columns: 3fr 2fr; }
+  @media (max-width: 900px) { .kpis { grid-template-columns: 1fr; } .two { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); min-width: 0; }
+  .card + .card, .grid + .grid, .grid + .card, .card + .grid { margin-top: 16px; }
+
+  /* KPI tile */
+  .kpi { cursor: pointer; transition: border-color .12s; position: relative; }
+  .kpi:hover { border-color: var(--text-3); }
+  .kpi.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow); }
+  .kpi .name { font-size: 12px; color: var(--text-2); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi .val { font-size: 30px; font-weight: 700; letter-spacing: -.03em; margin-top: 4px; line-height: 1.1; }
+  .kpi .val small { font-size: 16px; color: var(--text-2); font-weight: 500; margin-left: 2px; }
+  .kpi .delta { font-size: 12px; margin-top: 4px; color: var(--text-2); }
+  .kpi .delta b { font-weight: 600; }
+  .kpi .delta.up b { color: var(--pos); } .kpi .delta.down b { color: var(--neg); }
+  .kpi svg { display: block; width: 100%; height: 44px; margin-top: 10px; overflow: visible; }
+
+  svg text { fill: var(--text-2); font-family: inherit; font-size: 11px; }
+  .axis path, .axis line { stroke: var(--grid); }
+  .axis .domain { display: none; }
+  .gridline { stroke: var(--grid); stroke-dasharray: 2 3; }
+
+  /* tooltip */
+  .tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 12px; box-shadow: 0 8px 30px -8px rgba(0,0,0,.35); max-width: 300px; opacity: 0; transition: opacity .08s; }
+  .tip.show { opacity: 1; }
+  .tip .t { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .tip .c { color: var(--text-3); margin-bottom: 6px; }
+  .tip table { border-collapse: collapse; width: 100%; }
+  .tip td { padding: 1px 0; color: var(--text-2); }
+  .tip td:last-child { text-align: right; color: var(--text); font-weight: 500; }
+  .tip .ph { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .tip .ph .l { color: var(--text-3); font-size: 11px; display: flex; justify-content: space-between; }
+  .tip svg { display: block; width: 100%; height: 48px; overflow: visible; margin-top: 4px; }
+
+  /* bar chart */
+  .bars svg { display: block; width: 100%; overflow: visible; }
+  .bar-row { cursor: default; }
+  .bar-row:hover rect.bar { filter: brightness(1.12); }
+  .bar-row .ico { font-size: 15px; }
+  .empty { color: var(--text-3); padding: 40px 0; text-align: center; }
+
+  /* categories */
+  .cats { display: grid; grid-template-columns: 1fr; gap: 6px; }
+  .cat { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; transition: background .12s; }
+  .cat:hover { background: var(--surface-2); }
+  .cat.on { border-color: var(--accent); background: var(--surface-2); }
+  .cat.dim { opacity: .45; }
+  .cat .ico { width: 34px; height: 34px; border-radius: 9px; background: var(--surface-2); display: grid; place-items: center; font-size: 18px; }
+  .cat .nm { font-weight: 600; font-size: 13px; }
+  .cat .meta { font-size: 11.5px; color: var(--text-3); margin-top: 1px; }
+  .cat .meta b { color: var(--text-2); font-weight: 500; }
+  .cat .bar { height: 4px; border-radius: 2px; background: var(--surface-2); margin-top: 5px; overflow: hidden; }
+  .cat .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+  .cat .sum { text-align: right; }
+  .cat .sum .v { font-weight: 600; font-size: 14px; }
+  .cat .sum .p { font-size: 11px; color: var(--text-3); }
+
+  footer { margin-top: 28px; color: var(--text-3); font-size: 12px; line-height: 1.6; }
+  footer a { color: var(--text-2); }
+</style>
+</head>
+<body>
+<div id="app" class="wrap">
+  <header>
+    <div>
+      <h1>Лавка · заказы пользователя</h1>
+      <div class="sub">
+        {{ periodLabel }} · {{ fmtInt(totals.orders) }} заказов · {{ fmtInt(totals.lines) }} позиций в чеках · только доставленные заказы
+      </div>
+    </div>
+    <div class="sub">d3.js + Vue.js · датасет недели 1 (вариант B)</div>
+  </header>
+
+  <!-- filters -->
+  <div class="filters">
+    <span class="lbl">Категории:</span>
+    <button class="chip reset" :class="{on: selected.size===0}" @click="selected = new Set()">Все</button>
+    <button v-for="c in categories" :key="c" class="chip" :class="{on: selected.has(c)}" @click="toggleCat(c)">
+      <span class="ic">{{ icon(c) }}</span>{{ c }}
+    </button>
+    <div class="seg" title="Чем измерять потребление">
+      <button :class="{on: measure==='qty'}" @click="measure='qty'">Штуки</button>
+      <button :class="{on: measure==='sum'}" @click="measure='sum'">Деньги, ₽</button>
+    </div>
+    <select v-model.number="topN" title="Сколько позиций показывать">
+      <option :value="10">топ‑10</option><option :value="20">топ‑20</option><option :value="30">топ‑30</option>
+    </select>
+    <label class="chip" :class="{on: !hideServices}" title="Доставка и упаковка — не товары, по умолчанию скрыты" style="user-select:none">
+      <input type="checkbox" v-model="hideServices" style="display:none">{{ hideServices ? '🛵 показать услуги' : '🛵 услуги показаны' }}
+    </label>
+  </div>
+
+  <!-- KPI tiles -->
+  <div class="grid kpis">
+    <div v-for="m in metrics" :key="m.key" class="card kpi" :class="{on: metric===m.key}" @click="metric=m.key" :title="'Показать динамику: '+m.name">
+      <div class="name">{{ m.name }}</div>
+      <div class="val mono">{{ m.format(current[m.key]) }}<small>{{ m.unit }}</small></div>
+      <div class="delta" :class="deltaClass(m.key)">
+        <b>{{ deltaText(m.key) }}</b> к предыдущему месяцу · {{ lastMonthLabel }}
+      </div>
+      <sparkline :values="series.map(d => d[m.key])" :months="series.map(d => d.month)" :fmt="m.format" :unit="m.unit"></sparkline>
+    </div>
+  </div>
+
+  <!-- 24 months trend -->
+  <div class="card">
+    <div class="h2row">
+      <h2>{{ metricObj.name }} по месяцам — последние 24 месяца</h2>
+      <span class="hint">{{ metricObj.hint }}</span>
+    </div>
+    <trend-chart :data="series" :metric="metric" :fmt="metricObj.format" :unit="metricObj.unit"></trend-chart>
+  </div>
+
+  <div class="grid two">
+    <!-- consumption by items -->
+    <div class="card bars">
+      <div class="h2row">
+        <h2>Что заказывают чаще всего — {{ measure==='qty' ? 'по количеству, шт' : 'по сумме, ₽' }}</h2>
+        <span class="hint">{{ selected.size ? 'в выбранных категориях' : 'все категории' }}{{ hideServices ? ' · без услуг Лавки' : '' }} · за весь период · наведи на бар — динамика цены</span>
+      </div>
+      <item-bars v-if="items.length" :items="items" :measure="measure" :icon="icon" :price-history="priceHistory"></item-bars>
+      <div v-else class="empty">Нет данных для выбранных категорий</div>
+    </div>
+
+    <!-- categories list -->
+    <div class="card">
+      <div class="h2row">
+        <h2>Категории</h2>
+        <span class="hint">клик — фильтр</span>
+      </div>
+      <div class="cats">
+        <div v-for="c in catStats" :key="c.cat" class="cat" :class="{on: selected.has(c.cat), dim: selected.size && !selected.has(c.cat)}" @click="toggleCat(c.cat)">
+          <div class="ico">{{ icon(c.cat) }}</div>
+          <div>
+            <div class="nm">{{ c.cat }}</div>
+            <div class="meta"><b>{{ fmtInt(c.orders) }}</b> заказов · <b>{{ fmtInt(c.qty) }}</b> шт · скидка <b>{{ fmtPct(c.disc) }}</b> · средний чек позиции <b>{{ fmtMoney(c.avgLine) }} ₽</b></div>
+            <div class="bar"><i :style="{width: (100*c.sum/catStats[0].sum)+'%'}"></i></div>
+          </div>
+          <div class="sum">
+            <div class="v mono">{{ fmtMoney(c.sum) }} ₽</div>
+            <div class="p">{{ fmtPct(c.share) }} трат</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Метрики считаются по доставленным заказам (отменённые исключены). «Средняя скидка» — доля скидки от полной стоимости позиций в месяце:
+    1 − Σ(цена со скидкой × кол-во) / Σ(цена без скидки × кол-во). Текущее значение — последний полный месяц в данных ({{ lastMonthLabel }}).
+    Источник: датасет первой недели курса «Визуализация». Код: <a href="https://github.com/moleand-creator/lavka-dashboard">GitHub</a>.
+  </footer>
+
+  <div class="tip" :class="{show: tip.show}" :style="{left: tip.x+'px', top: tip.y+'px'}" v-html="tip.html"></div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
+
+/* ---------- helpers ---------- */
+const MONTHS_RU = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+const MONTHS_FULL = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+const monthLabel = (ym, full=false) => { const [y,m] = ym.split('-'); return (full ? MONTHS_FULL[+m-1] : MONTHS_RU[+m-1]) + ' ' + (full ? y : y.slice(2)); };
+const addMonths = (ym, k) => { const [y,m] = ym.split('-').map(Number); const d = new Date(y, m-1+k, 1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
+const fmtInt = n => new Intl.NumberFormat('ru-RU').format(Math.round(n||0));
+const fmtMoney = n => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(Math.round(n||0));
+const fmtPct = n => (n==null || isNaN(n)) ? '—' : (Math.round(n*10)/10).toLocaleString('ru-RU') + ' %';
+const ICONS = {'Услуги Лавки':'🛵','Готовая еда':'🍱','Вода':'💧','Напитки':'🥤','Сладости':'🍫','Фрукты':'🍎','База':'🍞','Овощи':'🥦','Снеки':'🍿','Товары для дома':'🧻','Аптека':'💊'};
+const icon = c => ICONS[c] || '🛒';
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+/* ---------- shared tooltip ---------- */
+const tip = reactive({show:false, x:0, y:0, html:''});
+function showTip(ev, html) {
+  tip.html = html; tip.show = true; moveTip(ev);
+}
+function moveTip(ev) {
+  const pad = 14, w = 300, h = 220;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > innerWidth) x = ev.clientX - w - pad;
+  if (y + h > innerHeight) y = ev.clientY - h - pad;
+  tip.x = x; tip.y = y;
+}
+function hideTip() { tip.show = false; }
+
+/* ---------- components ---------- */
+const Sparkline = {
+  props: ['values','months','fmt','unit'],
+  template: '<svg ref="el"></svg>',
+  setup(props) {
+    const el = ref(null);
+    const draw = () => {
+      const svg = d3.select(el.value); svg.selectAll('*').remove();
+      const W = el.value.clientWidth || 300, H = 44;
+      const v = props.values, n = v.length;
+      const x = d3.scaleLinear().domain([0, n-1]).range([2, W-2]);
+      const y = d3.scaleLinear().domain([0, d3.max(v) || 1]).nice().range([H-2, 4]);
+      const acc = css('--accent');
+      svg.append('path').datum(v).attr('fill', acc).attr('fill-opacity', .12)
+        .attr('d', d3.area().x((d,i)=>x(i)).y0(H-2).y1(d=>y(d)).curve(d3.curveMonotoneX));
+      svg.append('path').datum(v).attr('fill','none').attr('stroke', acc).attr('stroke-width', 2)
+        .attr('d', d3.line().x((d,i)=>x(i)).y(d=>y(d)).curve(d3.curveMonotoneX));
+      svg.append('circle').attr('cx', x(n-1)).attr('cy', y(v[n-1])).attr('r', 3.5).attr('fill', acc).attr('stroke', css('--surface')).attr('stroke-width', 2);
+      const hover = svg.append('circle').attr('r', 3.5).attr('fill', acc).attr('stroke', css('--surface')).attr('stroke-width', 2).style('display','none');
+      svg.append('rect').attr('width', W).attr('height', H).attr('fill','transparent')
+        .on('mousemove', ev => {
+          const [mx] = d3.pointer(ev); const i = Math.max(0, Math.min(n-1, Math.round(x.invert(mx))));
+          hover.style('display', null).attr('cx', x(i)).attr('cy', y(v[i]));
+          showTip(ev, `<div class="t">${monthLabel(props.months[i], true)}</div><table><tr><td>Значение</td><td>${props.fmt(v[i])}${props.unit}</td></tr></table>`);
+        })
+        .on('mouseleave', () => { hover.style('display','none'); hideTip(); });
+    };
+    onMounted(() => { draw(); addEventListener('resize', draw); });
+    watch(() => props.values, () => nextTick(draw));
+    return { el };
+  }
+};
+
+const TrendChart = {
+  props: ['data','metric','fmt','unit'],
+  template: '<svg ref="el" style="display:block;width:100%;height:260px;overflow:visible"></svg>',
+  setup(props) {
+    const el = ref(null);
+    const draw = () => {
+      const svg = d3.select(el.value); svg.selectAll('*').remove();
+      const W = el.value.clientWidth || 800, H = 260, m = {t: 16, r: 16, b: 28, l: 52};
+      const data = props.data, key = props.metric;
+      const x = d3.scaleBand().domain(data.map(d => d.month)).range([m.l, W-m.r]).padding(.35);
+      const y = d3.scaleLinear().domain([0, d3.max(data, d => d[key]) || 1]).nice().range([H-m.b, m.t]);
+      const acc = css('--accent');
+      svg.append('g').attr('class','axis').call(d3.axisLeft(y).ticks(5).tickSize(-(W-m.l-m.r)).tickFormat(v => props.unit==='%' ? v : d3.format('~s')(v).replace('k',' тыс').replace('M',' млн')))
+        .attr('transform', `translate(${m.l},0)`).selectAll('line').attr('class','gridline');
+      svg.append('g').attr('class','axis').attr('transform', `translate(0,${H-m.b})`)
+        .call(d3.axisBottom(x).tickFormat((d,i) => (i%2===0 || data.length<=12) ? monthLabel(d) : '').tickSize(0)).selectAll('text').attr('dy','1.2em');
+      const g = svg.append('g');
+      const rows = g.selectAll('g').data(data).join('g');
+      rows.append('rect').attr('x', d => x(d.month)).attr('width', x.bandwidth())
+        .attr('y', d => y(d[key])).attr('height', d => Math.max(0, y(0)-y(d[key]))).attr('fill', acc).attr('rx', 3)
+        .attr('fill-opacity', (d,i) => i === data.length-1 ? 1 : .75);
+      // avg line
+      const avg = d3.mean(data, d => d[key]);
+      svg.append('line').attr('x1', m.l).attr('x2', W-m.r).attr('y1', y(avg)).attr('y2', y(avg)).attr('stroke', css('--text-3')).attr('stroke-dasharray','3 3');
+      svg.append('text').attr('x', m.l+4).attr('y', y(avg)-4).attr('text-anchor','start').text('среднее ' + props.fmt(avg) + props.unit);
+      // last value label
+      const last = data[data.length-1];
+      svg.append('text').attr('x', x(last.month)+x.bandwidth()/2).attr('y', y(last[key])-6).attr('text-anchor','middle').style('font-weight',600).style('fill', css('--text')).text(props.fmt(last[key]) + props.unit);
+      // hover hit targets
+      rows.append('rect').attr('x', d => x(d.month) - x.step()*x.padding()/2).attr('width', x.step()).attr('y', m.t).attr('height', H-m.b-m.t).attr('fill','transparent')
+        .on('mousemove', (ev, d) => {
+          const i = data.indexOf(d), prev = i>0 ? data[i-1][key] : null;
+          const dlt = prev ? ((d[key]-prev)/prev*100) : null;
+          showTip(ev, `<div class="t">${monthLabel(d.month, true)}</div><table>
+            <tr><td>Заказов</td><td>${fmtInt(d.orders)}</td></tr>
+            <tr><td>Сумма трат</td><td>${fmtMoney(d.sum)} ₽</td></tr>
+            <tr><td>Средняя скидка</td><td>${fmtPct(d.disc)}</td></tr>
+            ${dlt!=null ? `<tr><td>${props.metric==='disc'?'Скидка':'Изменение'} к пред. месяцу</td><td>${dlt>0?'+':''}${Math.round(dlt)} %</td></tr>` : ''}</table>`);
+        }).on('mouseleave', hideTip);
+    };
+    onMounted(() => { draw(); addEventListener('resize', draw); });
+    watch(() => [props.data, props.metric], () => nextTick(draw), {deep: true});
+    return { el };
+  }
+};
+
+const ItemBars = {
+  props: ['items','measure','icon','priceHistory'],
+  template: '<svg ref="el"></svg>',
+  setup(props) {
+    const el = ref(null);
+    const draw = () => {
+      const svg = d3.select(el.value); svg.selectAll('*').remove();
+      const items = props.items, key = props.measure;
+      const rowH = 30, W = el.value.clientWidth || 600, m = {t: 6, r: 64, b: 6, l: 36};
+      const H = m.t + m.b + rowH*items.length;
+      svg.attr('height', H);
+      const labelW = Math.min(240, Math.max(140, W*0.36));
+      const x = d3.scaleLinear().domain([0, d3.max(items, d => d[key]) || 1]).range([m.l+labelW, W-m.r]);
+      const y = d3.scaleBand().domain(items.map(d => d.item)).range([m.t, H-m.b]).padding(.3);
+      const acc = css('--accent');
+      const fmtV = v => key==='qty' ? fmtInt(v)+' шт' : fmtMoney(v)+' ₽';
+      const rows = svg.selectAll('g.bar-row').data(items).join('g').attr('class','bar-row');
+      rows.append('rect').attr('x', 0).attr('y', d => y(d.item)-3).attr('width', W).attr('height', y.bandwidth()+6).attr('fill','transparent');
+      rows.append('text').attr('class','ico').attr('x', m.l-10).attr('y', d => y(d.item)+y.bandwidth()/2).attr('dy','.38em').attr('text-anchor','middle').text(d => props.icon(d.cat));
+      rows.append('text').attr('x', m.l+6).attr('y', d => y(d.item)+y.bandwidth()/2).attr('dy','.35em').style('fill', css('--text')).style('font-size','12.5px')
+        .text(d => d.item).each(function(d){ // truncate
+          const t = d3.select(this); let s = d.item; while (this.getComputedTextLength() > labelW-14 && s.length > 4) { s = s.slice(0,-2); t.text(s+'…'); } });
+      rows.append('rect').attr('class','bar').attr('x', x(0)).attr('y', d => y(d.item)).attr('height', y.bandwidth()).attr('width', d => Math.max(2, x(d[key])-x(0))).attr('fill', acc).attr('rx', 3);
+      rows.append('text').attr('class','mono').attr('x', d => x(d[key])+6).attr('y', d => y(d.item)+y.bandwidth()/2).attr('dy','.35em').style('fill', css('--text-2')).style('font-size','11.5px').text(d => fmtV(d[key]));
+      rows.on('mousemove', (ev, d) => showTip(ev, tipHtml(d))).on('mouseleave', hideTip);
+    };
+    const tipHtml = d => {
+      const ph = props.priceHistory(d.item);
+      let chart = '';
+      if (ph.length >= 2) {
+        const w = 270, h = 48, xs = d3.scaleLinear().domain([0, ph.length-1]).range([2, w-2]);
+        const ext = d3.extent(ph, p => p.price); const ys = d3.scaleLinear().domain([ext[0]*0.9, ext[1]*1.05]).range([h-4, 4]);
+        const path = d3.line().x((p,i)=>xs(i)).y(p=>ys(p.price)).curve(d3.curveMonotoneX)(ph);
+        const acc = css('--accent-2');
+        chart = `<div class="ph"><div class="l"><span>Динамика цены (средняя за месяц)</span><span>${monthLabel(ph[0].month)} → ${monthLabel(ph[ph.length-1].month)}</span></div>
+          <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="${acc}" stroke-width="2"/>
+          ${ph.map((p,i)=>`<circle cx="${xs(i)}" cy="${ys(p.price)}" r="2.2" fill="${acc}"/>`).join('')}</svg>
+          <div class="l"><span>${fmtMoney(ph[0].price)} ₽</span><span>мин ${fmtMoney(ext[0])} · макс ${fmtMoney(ext[1])}</span><span>${fmtMoney(ph[ph.length-1].price)} ₽ (${ph[ph.length-1].price>=ph[0].price?'+':''}${Math.round((ph[ph.length-1].price/ph[0].price-1)*100)} %)</span></div></div>`;
+      } else if (ph.length === 1) {
+        chart = `<div class="ph"><div class="l"><span>Покупалась только в ${monthLabel(ph[0].month, true)}</span><span>${fmtMoney(ph[0].price)} ₽</span></div></div>`;
+      }
+      return `<div class="t">${props.icon(d.cat)} ${d.item}</div><div class="c">${d.cat}</div><table>
+        <tr><td>Куплено</td><td>${fmtInt(d.qty)} шт</td></tr>
+        <tr><td>Потрачено</td><td>${fmtMoney(d.sum)} ₽</td></tr>
+        <tr><td>Заказов с позицией</td><td>${fmtInt(d.orders)}</td></tr>
+        <tr><td>Средняя цена</td><td>${fmtMoney(d.sum/d.qty)} ₽</td></tr>
+        <tr><td>Средняя скидка</td><td>${fmtPct(d.disc)}</td></tr>
+        <tr><td>Последняя покупка</td><td>${d.last.split('-').reverse().join('.')}</td></tr></table>${chart}`;
+    };
+    onMounted(() => { draw(); addEventListener('resize', draw); });
+    watch(() => [props.items, props.measure], () => nextTick(draw), {deep: true});
+    return { el };
+  }
+};
+
+/* ---------- app ---------- */
+createApp({
+  components: { Sparkline, TrendChart, ItemBars },
+  setup() {
+    const raw = window.ORDERS.filter(r => r.status === 'доставлен');
+    const categories = [...new Set(raw.map(r => r.cat))].sort((a,b) => a.localeCompare(b, 'ru'));
+    const selected = ref(new Set());
+    const measure = ref('qty');
+    const metric = ref('orders');
+    const topN = ref(20);
+    const hideServices = ref(true);
+
+    const toggleCat = c => { const s = new Set(selected.value); s.has(c) ? s.delete(c) : s.add(c); selected.value = s; };
+    const rows = computed(() => selected.value.size ? raw.filter(r => selected.value.has(r.cat)) : raw);
+
+    const lastMonth = d3.max(raw, r => r.date.slice(0,7));
+    const months = d3.range(23, -1, -1).map(k => addMonths(lastMonth, -k));
+    const periodLabel = `${monthLabel(months[0], true)} — ${monthLabel(lastMonth, true)}`;
+    const lastMonthLabel = monthLabel(lastMonth, true);
+
+    const aggMonth = rs => {
+      const by = d3.rollup(rs, v => ({
+        orders: new Set(v.map(r => r.order)).size,
+        sum: d3.sum(v, r => r.sum),
+        full: d3.sum(v, r => r.price * r.qty),
+        discSum: d3.sum(v, r => r.priceDisc * r.qty)
+      }), r => r.date.slice(0,7));
+      return months.map(mo => { const a = by.get(mo) || {orders:0, sum:0, full:0, discSum:0};
+        return { month: mo, orders: a.orders, sum: a.sum, disc: a.full ? (1 - a.discSum/a.full)*100 : 0 }; });
+    };
+    const series = computed(() => aggMonth(rows.value));
+    const current = computed(() => series.value[series.value.length-1]);
+    const prev = computed(() => series.value[series.value.length-2]);
+
+    const metrics = [
+      { key:'orders', name:'Заказов за месяц', unit:'', format: fmtInt, hint:'уникальные номера заказов' },
+      { key:'sum', name:'Сумма трат за месяц', unit:' ₽', format: fmtMoney, hint:'сумма по позициям с учётом скидок' },
+      { key:'disc', name:'Средняя скидка', unit:' %', format: v => (Math.round(v*10)/10).toLocaleString('ru-RU'), hint:'доля скидки от полной стоимости' }
+    ];
+    const metricObj = computed(() => metrics.find(m => m.key === metric.value));
+    const deltaVal = k => k === 'disc' ? (current.value[k] - prev.value[k]) : (prev.value[k] ? (current.value[k]-prev.value[k])/prev.value[k]*100 : null);
+    const deltaText = k => { const d = deltaVal(k); if (d == null || isNaN(d)) return '—'; return (d>0?'+':'') + (k==='disc' ? (Math.round(d*10)/10).toLocaleString('ru-RU')+' п.п.' : Math.round(d)+' %'); };
+    const deltaClass = k => { const d = deltaVal(k); return d == null ? '' : d > 0 ? 'up' : d < 0 ? 'down' : ''; };
+
+    const items = computed(() => {
+      const src = hideServices.value ? rows.value.filter(r => r.cat !== 'Услуги Лавки') : rows.value;
+      const by = d3.rollups(src, v => ({
+        cat: v[0].cat, qty: d3.sum(v, r => r.qty), sum: d3.sum(v, r => r.sum),
+        orders: new Set(v.map(r => r.order)).size,
+        disc: (1 - d3.sum(v, r => r.priceDisc*r.qty) / d3.sum(v, r => r.price*r.qty)) * 100,
+        last: d3.max(v, r => r.date)
+      }), r => r.item).map(([item, a]) => ({ item, ...a }));
+      return by.sort((a,b) => b[measure.value]-a[measure.value]).slice(0, topN.value);
+    });
+    const priceCache = new Map();
+    const priceHistory = item => {
+      if (!priceCache.has(item)) {
+        const by = d3.rollups(raw.filter(r => r.item === item), v => d3.sum(v, r => r.sum)/d3.sum(v, r => r.qty), r => r.date.slice(0,7))
+          .map(([month, price]) => ({month, price})).sort((a,b) => a.month.localeCompare(b.month));
+        priceCache.set(item, by);
+      }
+      return priceCache.get(item);
+    };
+
+    const totalSum = d3.sum(raw, r => r.sum);
+    const catStats = computed(() => d3.rollups(raw, v => ({
+      orders: new Set(v.map(r => r.order)).size, qty: d3.sum(v, r => r.qty), sum: d3.sum(v, r => r.sum),
+      disc: (1 - d3.sum(v, r => r.priceDisc*r.qty)/d3.sum(v, r => r.price*r.qty))*100,
+      avgLine: d3.mean(v, r => r.sum)
+    }), r => r.cat).map(([cat, a]) => ({cat, ...a, share: a.sum/totalSum*100})).sort((a,b) => b.sum-a.sum));
+
+    const totals = computed(() => ({ orders: new Set(rows.value.map(r => r.order)).size, lines: rows.value.length }));
+
+    return { categories, selected, toggleCat, measure, metric, topN, hideServices, metrics, metricObj, series, current, periodLabel, lastMonthLabel,
+      deltaText, deltaClass, items, priceHistory, catStats, totals, tip, icon, fmtInt, fmtMoney, fmtPct };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
